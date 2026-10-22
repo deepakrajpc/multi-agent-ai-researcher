@@ -1,6 +1,6 @@
 
+import os
 import streamlit as st
-from pipeline import run_research_pipeline
 
 # --------------------------------------------------
 # PAGE CONFIGURATION
@@ -14,34 +14,71 @@ st.set_page_config(
 )
 
 # --------------------------------------------------
+# LOAD API KEYS
+# Supports local .env and Streamlit Cloud Secrets
+# --------------------------------------------------
+
+try:
+    if "GROQ_API_KEY" in st.secrets:
+        os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+
+    if "TAVILY_API_KEY" in st.secrets:
+        os.environ["TAVILY_API_KEY"] = st.secrets["TAVILY_API_KEY"]
+
+except FileNotFoundError:
+    # No Streamlit secrets file locally; .env is loaded
+    # by pipeline.py and tools.py using python-dotenv.
+    pass
+
+# Import after loading deployment secrets
+from pipeline import run_research_pipeline
+
+
+# --------------------------------------------------
 # CUSTOM CSS
 # --------------------------------------------------
 
-st.markdown("""
-<style>
-    .main-title {
-        font-size: 2.5rem;
-        font-weight: 800;
-        margin-bottom: 0.2rem;
-    }
-    .subtitle {
-        color: #9CA3AF;
-        font-size: 1rem;
-        margin-bottom: 1.5rem;
-    }
-    .stButton > button {
-        width: 100%;
-        border-radius: 10px;
-        min-height: 3rem;
-        font-weight: 600;
-    }
-    div[data-testid="stMetric"] {
-        border: 1px solid rgba(128,128,128,0.25);
-        padding: 1rem;
-        border-radius: 12px;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.markdown(
+    """
+    <style>
+        .main-title {
+            font-size: 2.4rem;
+            font-weight: 800;
+            margin-bottom: 0.2rem;
+        }
+
+        .subtitle {
+            color: #9CA3AF;
+            font-size: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        div[data-testid="stMetric"] {
+            border: 1px solid rgba(128, 128, 128, 0.25);
+            padding: 1rem;
+            border-radius: 12px;
+        }
+
+        .stButton > button {
+            border-radius: 10px;
+            font-weight: 600;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# --------------------------------------------------
+# SESSION STATE
+# --------------------------------------------------
+
+if "research_topic" not in st.session_state:
+    st.session_state.research_topic = ""
+
+if "research_result" not in st.session_state:
+    st.session_state.research_result = None
+
 
 # --------------------------------------------------
 # HEADER
@@ -51,151 +88,247 @@ st.markdown(
     '<div class="main-title">🔬 Multi-Agent AI Researcher</div>',
     unsafe_allow_html=True,
 )
+
 st.markdown(
-    '<div class="subtitle">'
-    'Research smarter with AI-powered search, reading, writing, and evaluation.'
-    '</div>',
+    """
+    <div class="subtitle">
+        Turn any research question into a structured report using
+        AI-powered search, deep reading, writing, and critical evaluation.
+    </div>
+    """,
     unsafe_allow_html=True,
 )
+
+st.divider()
+
 
 # --------------------------------------------------
 # SIDEBAR
 # --------------------------------------------------
 
 with st.sidebar:
-    st.title("⚙️ Research Settings")
-    st.write("Your research pipeline uses four AI stages.")
+    st.title("⚙️ Research Studio")
+
+    st.write("Your AI research workflow")
 
     st.markdown("---")
-    st.markdown("### 🤖 Agents")
-    st.write("🔎 Search Agent")
-    st.write("📖 Reader Agent")
-    st.write("✍️ Writer Chain")
-    st.write("🧐 Critic Chain")
+
+    st.markdown("### 🤖 Pipeline Stages")
+    st.write("🔎 Search Agent — finds web information")
+    st.write("📖 Reader Agent — scrapes a relevant page")
+    st.write("✍️ Writer Chain — creates the report")
+    st.write("🧐 Critic Chain — evaluates the report")
 
     st.markdown("---")
+
     st.markdown("### 💡 Suggested Topics")
 
-    examples = [
+    example_topics = [
         "Impact of war on stock market",
-        "Artificial intelligence in education",
         "Inflation and the Indian economy",
+        "Artificial intelligence in education",
         "Climate change and global markets",
         "Future of data analytics",
+        "Effects of social media on students",
     ]
 
     selected_topic = st.selectbox(
         "Choose a sample topic",
-        ["Select a topic..."] + examples,
+        ["Choose a topic..."] + example_topics,
     )
 
-    if st.button("Use selected topic"):
-        if selected_topic != "Select a topic...":
-            st.session_state["research_topic"] = selected_topic
+    if st.button("Use this topic", use_container_width=True):
+        if selected_topic != "Choose a topic...":
+            st.session_state.research_topic = selected_topic
+            st.rerun()
 
     st.markdown("---")
-    st.caption("Powered by LangChain, Groq, Tavily, and Streamlit.")
+
+    st.caption(
+        "Built with Streamlit, LangChain, Groq, and Tavily."
+    )
+
 
 # --------------------------------------------------
 # TOPIC INPUT
 # --------------------------------------------------
 
-if "research_topic" not in st.session_state:
-    st.session_state["research_topic"] = ""
+st.subheader("📝 What do you want to research?")
 
-topic = st.text_input(
-    "📝 Enter your research topic",
-    key="research_topic",
-    placeholder="e.g. Impact of war on stock market",
-)
+with st.form("research_form"):
+    topic = st.text_input(
+        "Research topic",
+        key="research_topic",
+        placeholder="Example: Impact of war on stock market",
+        help="Enter a topic you want the AI agents to investigate.",
+    )
 
-run_button = st.button(
-    "🚀 Start Research",
-    type="primary",
-    use_container_width=True,
-)
+    submitted = st.form_submit_button(
+        "🚀 Start Research",
+        type="primary",
+        use_container_width=True,
+    )
+
 
 # --------------------------------------------------
-# RUN RESEARCH
+# RUN PIPELINE
 # --------------------------------------------------
 
-if run_button:
+if submitted:
     if not topic.strip():
         st.warning("Please enter a research topic first.")
+
+    elif not os.getenv("GROQ_API_KEY") or not os.getenv("TAVILY_API_KEY"):
+        st.error(
+            "API keys are missing. Add GROQ_API_KEY and "
+            "TAVILY_API_KEY to your local .env file or "
+            "Streamlit Cloud Secrets."
+        )
+
     else:
+        st.session_state.research_result = None
+
+        progress = st.progress(0, text="Preparing your research...")
+
         try:
+            progress.progress(
+                15,
+                text="Running the search and reading agents...",
+            )
+
             with st.spinner(
-                "AI agents are researching your topic. Please wait..."
+                "Researching your topic. This may take a few minutes..."
             ):
                 result = run_research_pipeline(topic.strip())
 
-            st.session_state["research_result"] = result
-            st.success("Research pipeline completed successfully!")
+            progress.progress(
+                100,
+                text="Research pipeline completed!",
+            )
 
-        except Exception as e:
-            st.error("The research pipeline failed.")
-            st.exception(e)
+            st.session_state.research_result = result
+
+            st.success("Your research report is ready!")
+
+        except Exception as error:
+            st.error("The research pipeline encountered an error.")
+            st.code(str(error))
+
+            with st.expander("Technical details"):
+                st.exception(error)
+
+        finally:
+            progress.empty()
+
 
 # --------------------------------------------------
 # DISPLAY RESULTS
 # --------------------------------------------------
 
-if "research_result" in st.session_state:
-    result = st.session_state["research_result"]
+result = st.session_state.research_result
 
-    st.markdown("---")
-    st.header("📊 Research Results")
+if result:
+    st.divider()
+    st.header("📊 Research Workspace")
 
-    report_tab, critique_tab, search_tab, reader_tab = st.tabs([
-        "📄 Final Report",
-        "🧐 Critic Evaluation",
-        "🔎 Search Results",
-        "📖 Reader Findings",
-    ])
+    st.write(
+        "Topic: **"
+        + str(topic if "topic" in locals() else st.session_state.research_topic)
+        + "**"
+    )
 
+    report = result.get("report", "No report was generated.")
+    critique = result.get("critique", "No critique is available.")
+    search_results = result.get(
+        "search_results",
+        "No search results are available.",
+    )
+    reader_results = result.get(
+        "reader_results",
+        "No reader findings are available.",
+    )
+
+    report_tab, critique_tab, search_tab, reader_tab = st.tabs(
+        [
+            "📄 Final Report",
+            "🧐 Critic Evaluation",
+            "🔎 Search Results",
+            "📖 Reader Findings",
+        ]
+    )
+
+    # FINAL REPORT
     with report_tab:
-        st.subheader("Final Research Report")
-
-        report = result.get("report", "No report generated.")
+        st.subheader("Research Report")
 
         st.markdown(report)
 
         st.download_button(
-            label="⬇️ Download Research Report",
+            label="⬇️ Download Report (.md)",
             data=report,
             file_name="research_report.md",
             mime="text/markdown",
             use_container_width=True,
+            key="download_report",
         )
 
+    # CRITIC EVALUATION
     with critique_tab:
         st.subheader("Critic Evaluation")
-
-        critique = result.get(
-            "critique",
-            "No critic evaluation available.",
-        )
 
         st.markdown(critique)
 
         st.download_button(
-            label="⬇️ Download Evaluation",
+            label="⬇️ Download Evaluation (.txt)",
             data=critique,
             file_name="research_evaluation.txt",
             mime="text/plain",
             use_container_width=True,
+            key="download_critique",
         )
 
+    # SEARCH RESULTS
     with search_tab:
         st.subheader("Web Search Findings")
-        st.text(result.get("search_results", "No search results."))
 
+        st.text(search_results)
+
+        st.download_button(
+            label="⬇️ Download Search Results",
+            data=search_results,
+            file_name="search_results.txt",
+            mime="text/plain",
+            key="download_search",
+        )
+
+    # READER FINDINGS
     with reader_tab:
         st.subheader("Deep Reading Findings")
-        st.text(result.get("reader_results", "No reader findings."))
+
+        st.text(reader_results)
+
+        st.download_button(
+            label="⬇️ Download Reader Findings",
+            data=reader_results,
+            file_name="reader_findings.txt",
+            mime="text/plain",
+            key="download_reader",
+        )
+
+    st.divider()
+
+    if st.button("🆕 Start a New Research Topic"):
+        st.session_state.research_result = None
+        st.session_state.research_topic = ""
+        st.rerun()
+
+
+# --------------------------------------------------
+# EMPTY STATE
+# --------------------------------------------------
 
 else:
-    st.markdown("---")
+    st.divider()
 
     st.subheader("✨ How it works")
 
@@ -203,16 +336,21 @@ else:
 
     with col1:
         st.markdown("### 🔎 Search")
-        st.write("Finds relevant web information.")
+        st.write("Find relevant web sources.")
 
     with col2:
         st.markdown("### 📖 Read")
-        st.write("Scrapes a relevant page for deeper context.")
+        st.write("Retrieve deeper page content.")
 
     with col3:
         st.markdown("### ✍️ Write")
-        st.write("Creates a structured research report.")
+        st.write("Generate a structured research report.")
 
     with col4:
         st.markdown("### 🧐 Critique")
-        st.write("Evaluates the report and suggests improvements.")
+        st.write("Score the report and identify improvements.")
+
+    st.info(
+        "Enter a research topic above to begin. "
+        "Your report and evaluation will appear here."
+    )
