@@ -6,14 +6,19 @@ from langchain_groq import ChatGroq
 from tools import web_search, scrap_url
 from dotenv import load_dotenv
 from rich import print
-import os
 
 load_dotenv()
 
-# Initialize the language model
+
+# --------------------------------------------------
+# LANGUAGE MODEL
+# --------------------------------------------------
+
 llm = ChatGroq(
     model="openai/gpt-oss-20b",
-    temperature=0
+    temperature=0,
+    max_tokens=1200,
+    max_retries=2,
 )
 
 
@@ -43,25 +48,26 @@ writer_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
         "You are an expert research writer. "
-        "Write clear, structured, insightful, and factual reports."
+        "Write clear, structured, factual, and insightful reports. "
+        "Do not invent facts, statistics, or URLs."
     ),
     (
         "human",
-        """Write a detailed research report on the topic below.
+        """Write a research report on the topic below.
 
 Topic: {topic}
 
 Research Gathered:
 {research}
 
-Structure the report as:
-- Introduction
-- Key Findings (minimum 3 well-explained points)
-- Conclusion
-- Sources (list all URLs found in the research)
+Use these sections:
+1. Introduction
+2. Key Findings (at least 3 explained points)
+3. Conclusion
+4. Sources (include URLs found in the research)
 
-Be detailed, factual, and professional.
-Do not invent facts, statistics, or URLs."""
+Be factual and professional. Keep the report concise but useful.
+Distinguish verified facts from uncertain claims."""
     ),
 ])
 
@@ -75,17 +81,16 @@ writer_chain = writer_prompt | llm | StrOutputParser()
 critic_prompt = ChatPromptTemplate.from_messages([
     (
         "system",
-        "You are a sharp and constructive research critic. "
-        "Evaluate reports honestly and specifically."
+        "You are a constructive research critic. "
+        "Evaluate the report honestly and specifically."
     ),
     (
         "human",
-        """Review the research report below and evaluate it strictly.
+        """Review this research report:
 
-Report:
 {report}
 
-Respond in this exact format:
+Return the evaluation in this exact format:
 
 Score: X/10
 
@@ -106,6 +111,31 @@ critic_chain = critic_prompt | llm | StrOutputParser()
 
 
 # --------------------------------------------------
+# HELPER: EXTRACT FINAL MESSAGE
+# --------------------------------------------------
+
+def get_final_message(result):
+    """Extract text from the final message returned by an agent."""
+    messages = result.get("messages", [])
+
+    for message in reversed(messages):
+        if getattr(message, "type", "") == "ai":
+            content = message.content
+
+            if isinstance(content, str):
+                return content
+
+            if isinstance(content, list):
+                return "\n".join(
+                    str(item.get("text", ""))
+                    for item in content
+                    if isinstance(item, dict) and item.get("text")
+                )
+
+    return "No response was returned by the agent."
+
+
+# --------------------------------------------------
 # RESEARCH PIPELINE
 # --------------------------------------------------
 
@@ -122,27 +152,24 @@ def run_research_pipeline(topic):
         "messages": [
             (
                 "user",
-                f"Search the web for recent, reliable information "
-                f"about '{topic}'. Return relevant titles, URLs, "
-                f"snippets, and useful findings."
+                f"Search for reliable information about '{topic}'. "
+                "Use the web_search tool. Return a concise summary "
+                "with relevant findings, titles, and source URLs. "
+                "Avoid unnecessary detail."
             )
         ]
     })
 
-    # Correctly access the final message
-    state["search_results"] = (
-        search_results["messages"][-1].content
-    )
+    state["search_results"] = get_final_message(search_results)
 
-    print("\n[green]Search completed.[/green]")
-    print(state["search_results"][:1500])
+    print("[green]Search completed.[/green]")
+    print(state["search_results"][:1000])
 
 
     # STEP 2: READER AGENT
     print("\n[bold cyan]STEP 2: Reader Agent[/bold cyan]")
     print("=" * 60)
 
-    # Create the reader agent before using it
     reader_agent = build_reader_agent()
 
     reader_results = reader_agent.invoke({
@@ -151,26 +178,24 @@ def run_research_pipeline(topic):
                 "user",
                 f"""Research topic: {topic}
 
-Here are the search results:
-{state['search_results'][:8000]}
+Search results:
+{state['search_results'][:3000]}
 
-Choose the most relevant URL from these results.
-Use the scrap_url tool to retrieve the page content.
-Then summarize the useful information and include the
-URL you actually scraped.
+Select the most relevant URL from the results.
+Use the scrap_url tool to retrieve that page.
+Summarize its most useful information in a concise format.
+Include the URL actually scraped.
 
-If scraping fails, explain the failure and use the
-available search results without inventing page content."""
+If scraping fails, explain the failure and do not invent
+page content. Use only information available in the search results."""
             )
         ]
     })
 
-    state["reader_results"] = (
-        reader_results["messages"][-1].content
-    )
+    state["reader_results"] = get_final_message(reader_results)
 
-    print("\n[green]Reading completed.[/green]")
-    print(state["reader_results"][:1500])
+    print("[green]Reading completed.[/green]")
+    print(state["reader_results"][:1000])
 
 
     # STEP 3: WRITER
@@ -178,8 +203,10 @@ available search results without inventing page content."""
     print("=" * 60)
 
     research = (
-        f"WEB SEARCH RESULTS:\n{state['search_results']}\n\n"
-        f"DEEPER READING:\n{state['reader_results']}"
+        "WEB SEARCH RESULTS:\n"
+        f"{state['search_results'][:2500]}\n\n"
+        "DEEPER READING:\n"
+        f"{state['reader_results'][:2500]}"
     )
 
     state["report"] = writer_chain.invoke({
@@ -187,8 +214,8 @@ available search results without inventing page content."""
         "research": research,
     })
 
-    print("\n[green]Research report generated.[/green]")
-    print(state["report"])
+    print("[green]Research report generated.[/green]")
+    print(state["report"][:1500])
 
 
     # STEP 4: CRITIC
@@ -196,10 +223,10 @@ available search results without inventing page content."""
     print("=" * 60)
 
     state["critique"] = critic_chain.invoke({
-        "report": state["report"],
+        "report": state["report"][:4000],
     })
 
-    print("\n[bold yellow]REPORT EVALUATION[/bold yellow]")
+    print("[bold yellow]REPORT EVALUATION[/bold yellow]")
     print(state["critique"])
 
 
@@ -208,10 +235,12 @@ available search results without inventing page content."""
 
     with open(filename, "w", encoding="utf-8") as file:
         file.write(f"RESEARCH TOPIC: {topic}\n\n")
+
         file.write("=" * 60 + "\n")
         file.write("RESEARCH REPORT\n")
         file.write("=" * 60 + "\n\n")
         file.write(state["report"])
+
         file.write("\n\n")
         file.write("=" * 60 + "\n")
         file.write("CRITIC EVALUATION\n")
