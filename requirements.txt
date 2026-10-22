@@ -1,0 +1,22 @@
+# Web Interface
+streamlit
+
+# Core Frameworks
+langchain
+langchain-community
+
+# Dedicated Ecosystem Model Integrations
+langchain-openai
+langchain-google-genai
+langchain-groq
+
+# Search Engine Tools
+tavily-python
+
+# Web Scraping Tools
+beautifulsoup4
+requests
+
+# Helper for secure API key loading
+python-dotenv
+rich
